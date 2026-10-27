@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#eaf4ff">
+  <title>TEMSIDERS · перевірка картки</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/@zxing/browser@0.1.5"></script>
+  <style>
+    :root { color-scheme: light; --blue:#2878c8; --ink:#18345f; --muted:#65758b; --paper:#f2f8ff; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; padding:24px 18px max(24px, env(safe-area-inset-bottom)); background:linear-gradient(160deg,#e7f3ff,#fbfdff 58%,#eaf5ff); color:var(--ink); font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:520px; margin:0 auto; }
+    .brand { text-align:center; margin:8px 0 24px; }
+    .badge { display:inline-grid; place-items:center; width:56px; height:56px; border-radius:50%; background:white; box-shadow:0 8px 24px #2878c822; font-size:27px; }
+    h1 { margin:12px 0 4px; font-size:22px; letter-spacing:.04em; }
+    .sub { margin:0; color:var(--muted); }
+    .panel { padding:14px; border:1px solid #d7e8f8; border-radius:22px; background:#ffffffd9; box-shadow:0 12px 35px #18345f0d; }
+    video { display:block; width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:14px; background:#d9e8f6; }
+    .status { min-height:48px; display:grid; place-items:center; padding:10px 4px 2px; text-align:center; color:var(--muted); }
+    .status.ok { color:#167044; font-weight:650; }
+    .status.error { color:#ad3434; }
+    button { width:100%; min-height:50px; margin-top:12px; border:0; border-radius:15px; background:var(--blue); color:#fff; font:600 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; cursor:pointer; }
+    button.secondary { background:#e8f2fc; color:var(--ink); }
+    .manual { margin-top:18px; padding-top:16px; border-top:1px solid #e3edf7; }
+    label { display:block; margin-bottom:8px; color:var(--muted); font-size:14px; }
+    .row { display:flex; gap:8px; }
+    input { min-width:0; flex:1; padding:0 13px; border:1px solid #cbdced; border-radius:13px; background:white; color:var(--ink); font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .row button { width:auto; min-width:112px; margin:0; }
+    .hint { margin:16px 4px 0; color:var(--muted); font-size:13px; text-align:center; }
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="brand">
+      <div class="badge">🔎</div>
+      <h1>TEMSIDERS</h1>
+      <p class="sub">Перевірка фан-картки</p>
+    </header>
+    <section class="panel">
+      <video id="preview" playsinline muted></video>
+      <div id="status" class="status">Натисни кнопку й наведи камеру на штрихкод Code 128.</div>
+      <button id="start">Увімкнути сканер</button>
+      <div class="manual">
+        <label for="code">Або введи номер з картки вручну</label>
+        <div class="row">
+          <input id="code" autocomplete="off" placeholder="Наприклад, 03M03">
+          <button id="check" class="secondary">Перевірити</button>
+        </div>
+      </div>
+    </section>
+    <p class="hint">Камера використовується лише для зчитування штрихкоду. Фото не зберігається й не надсилається.</p>
+  </main>
+  <script>
+    const tg = window.Telegram?.WebApp;
+    tg?.ready();
+    tg?.expand();
+    const video = document.getElementById('preview');
+    const statusEl = document.getElementById('status');
+    const startButton = document.getElementById('start');
+    const codeInput = document.getElementById('code');
+    let controls = null;
+    let sent = false;
+
+    function setStatus(text, kind='') {
+      statusEl.textContent = text;
+      statusEl.className = `status ${kind}`;
+    }
+    function submitCode(value) {
+      const code = String(value || '').trim().toUpperCase();
+      if (!/^[A-Z0-9]{1,32}$/.test(code)) {
+        setStatus('Номер має містити лише літери й цифри.', 'error');
+        return;
+      }
+      if (sent) return;
+      sent = true;
+      controls?.stop();
+      video.srcObject?.getTracks().forEach(track => track.stop());
+      setStatus(`Номер ${code} надіслано боту для перевірки…`);
+      if (tg?.sendData) {
+        tg.sendData(JSON.stringify({action:'check_card', code}));
+      } else {
+        setStatus('Відкрий цей сканер через кнопку в Telegram-боті.', 'error');
+        sent = false;
+      }
+    }
+
+    startButton.addEventListener('click', async () => {
+      if (!window.ZXingBrowser?.BrowserMultiFormatReader) {
+        setStatus('Не завантажився сканер. Перевір інтернет і перезапусти міні-додаток.', 'error');
+        return;
+      }
+      startButton.disabled = true;
+      setStatus('Запитую доступ до камери…');
+      try {
+        const reader = new ZXingBrowser.BrowserMultiFormatReader();
+        controls = await reader.decodeFromConstraints(
+          {video:{facingMode:{ideal:'environment'}}, audio:false},
+          video,
+          (result) => { if (result) submitCode(result.getText()); }
+        );
+        setStatus('Наведи задню камеру на штрихкод.');
+      } catch (error) {
+        console.error('Camera scanner error:', error);
+        const explanation = error?.name === 'NotAllowedError'
+          ? 'Немає доступу до камери. Дозволь камеру в налаштуваннях Telegram.'
+          : 'Не вдалося запустити камеру. Спробуй ввести номер вручну.';
+        setStatus(explanation, 'error');
+        startButton.disabled = false;
+      }
+    });
+    document.getElementById('check').addEventListener('click', () => submitCode(codeInput.value));
+    codeInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') submitCode(codeInput.value);
+    });
+    window.addEventListener('pagehide', () => controls?.stop());
+  </script>
+</body>
+</html>
