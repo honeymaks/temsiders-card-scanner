@@ -18,9 +18,9 @@
     .sub { margin:0; color:var(--muted); }
     .panel { padding:14px; border:1px solid #d7e8f8; border-radius:22px; background:#ffffffd9; box-shadow:0 12px 35px #18345f0d; }
     video { display:block; width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:14px; background:#d9e8f6; }
-    .status { min-height:48px; display:grid; place-items:center; padding:10px 4px 2px; text-align:center; color:var(--muted); }
+    .status { min-height:48px; display:grid; place-items:center; padding:10px 4px 2px; text-align:center; white-space:pre-line; color:var(--muted); }
     .status.ok { color:#167044; font-weight:650; }
-    .status.error { color:#ad3434; }
+    .status.error { color:#ad3434; font-weight:650; }
     button { width:100%; min-height:50px; margin-top:12px; border:0; border-radius:15px; background:var(--blue); color:#fff; font:600 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; cursor:pointer; }
     button.secondary { background:#e8f2fc; color:var(--ink); }
     .manual { margin-top:18px; padding-top:16px; border-top:1px solid #e3edf7; }
@@ -61,29 +61,61 @@
     const statusEl = document.getElementById('status');
     const startButton = document.getElementById('start');
     const codeInput = document.getElementById('code');
+    const apiBase = new URLSearchParams(window.location.search).get('api') || '';
     let controls = null;
-    let sent = false;
+    let checking = false;
 
     function setStatus(text, kind='') {
       statusEl.textContent = text;
       statusEl.className = `status ${kind}`;
     }
-    function submitCode(value) {
+    function stopCamera() {
+      controls?.stop();
+      controls = null;
+      video.srcObject?.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
+    }
+
+    async function submitCode(value) {
       const code = String(value || '').trim().toUpperCase();
       if (!/^[A-Z0-9]{1,32}$/.test(code)) {
         setStatus('Номер має містити лише літери й цифри.', 'error');
         return;
       }
-      if (sent) return;
-      sent = true;
-      controls?.stop();
-      video.srcObject?.getTracks().forEach(track => track.stop());
-      setStatus(`Номер ${code} надіслано боту для перевірки…`);
-      if (tg?.sendData) {
-        tg.sendData(JSON.stringify({action:'check_card', code}));
-      } else {
-        setStatus('Відкрий цей сканер через кнопку в Telegram-боті.', 'error');
-        sent = false;
+      if (checking) return;
+      if (!apiBase || !/^https:\/\//i.test(apiBase)) {
+        setStatus('Не налаштовано захищене з’єднання з ботом. Перевір CARD_SCANNER_API_URL.', 'error');
+        return;
+      }
+      checking = true;
+      stopCamera();
+      startButton.disabled = true;
+      setStatus(`Перевіряю картку №${code}…`);
+      try {
+        const response = await fetch(`${apiBase.replace(/\/$/, '')}/api/scan`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `tma ${tg?.initData || ''}`
+          },
+          body: JSON.stringify({code})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        if (result.status === 'valid') {
+          setStatus(`✅ КАРТКА ДІЙСНА\n№${result.code} · ${result.name}\nПриєднався: ${result.joined_on}\nInstagram: ${result.instagram}`, 'ok');
+        } else if (result.status === 'blocked') {
+          setStatus(`⛔ КАРТКУ ЗАБЛОКОВАНО\n№${result.code} · недійсна`, 'error');
+        } else {
+          setStatus(`❌ КАРТКУ НЕ ЗНАЙДЕНО\n№${result.code} · недійсна або видалена`, 'error');
+        }
+      } catch (error) {
+        console.error('Card verification failed:', error);
+        setStatus('Не вдалося зв’язатися з ботом. Переконайся, що Mac, бот і тунель запущені, та спробуй ще раз.', 'error');
+      } finally {
+        checking = false;
+        startButton.disabled = false;
+        startButton.textContent = 'Сканувати ще одну картку';
       }
     }
 
@@ -92,7 +124,12 @@
         setStatus('Не завантажився сканер. Перевір інтернет і перезапусти міні-додаток.', 'error');
         return;
       }
+      if (!apiBase) {
+        setStatus('Не налаштовано захищене з’єднання з ботом. Перевір CARD_SCANNER_API_URL.', 'error');
+        return;
+      }
       startButton.disabled = true;
+      startButton.textContent = 'Сканую…';
       setStatus('Запитую доступ до камери…');
       try {
         const reader = new ZXingBrowser.BrowserMultiFormatReader();
@@ -102,6 +139,7 @@
           (result) => { if (result) submitCode(result.getText()); }
         );
         setStatus('Наведи задню камеру на штрихкод.');
+        startButton.textContent = 'Камера активна';
       } catch (error) {
         console.error('Camera scanner error:', error);
         const explanation = error?.name === 'NotAllowedError'
@@ -109,13 +147,15 @@
           : 'Не вдалося запустити камеру. Спробуй ввести номер вручну.';
         setStatus(explanation, 'error');
         startButton.disabled = false;
+        startButton.textContent = 'Спробувати ще раз';
       }
     });
     document.getElementById('check').addEventListener('click', () => submitCode(codeInput.value));
     codeInput.addEventListener('keydown', event => {
       if (event.key === 'Enter') submitCode(codeInput.value);
     });
-    window.addEventListener('pagehide', () => controls?.stop());
+    if (!apiBase) setStatus('Сканер ще не підключений до API бота. Потрібно налаштувати CARD_SCANNER_API_URL.', 'error');
+    window.addEventListener('pagehide', stopCamera);
   </script>
 </body>
 </html>
